@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MCPE">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" href="/icon-192.png">
+<title>MCPE 0.16.2</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none;
+               touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+               font-family: -apple-system, system-ui, sans-serif; color: #fff; }
+  #stage { position: fixed; left: 0; top: 0; transform-origin: 0 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+         padding: 24px; font-size: 17px; line-height: 1.6; background: #000; }
+  #kb { position: fixed; left: 0; right: 0; top: 0; display: none; gap: 8px; padding: 8px 10px; background: rgba(20,20,20,.92);
+        align-items: center; z-index: 2; touch-action: manipulation; }
+  #kb.on { display: flex; }
+  #kb input { flex: 1; min-width: 0; font-size: 17px; padding: 8px 10px; border-radius: 8px; border: 1px solid #666;
+              background: #fff; color: #000; -webkit-user-select: text; user-select: text; }
+  #kb span { font-size: 13px; color: #bbb; white-space: nowrap; }
+  #pick { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 3;
+          background: rgba(0,0,0,.75); touch-action: manipulation; }
+  #pick.on { display: flex; }
+  #pick div { background: #222; border: 1px solid #555; border-radius: 12px; padding: 18px; max-width: 360px; text-align: center;
+              font-size: 15px; line-height: 1.6; }
+  #pick label, #pick button { display: block; margin: 12px auto 0; padding: 10px 16px; border-radius: 8px; font-size: 16px;
+              border: 0; color: #fff; background: #3a7d2c; width: 100%; box-sizing: border-box; }
+  #pick button { background: #555; }
+  #pick input { display: none; }
+  #snd { position: fixed; right: 8px; bottom: 8px; z-index: 2; font-size: 12px; color: #fff; background: rgba(0,0,0,.6);
+         padding: 4px 8px; border-radius: 6px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="16" height="9"></canvas></div>
+<div id="kb"><span>文字入力</span><input id="in" type="text" autocomplete="off" autocorrect="off" autocapitalize="off"
+     spellcheck="false" enterkeyhint="send" placeholder="ここをタップして入力"></div>
+<div id="pick"><div>スキンにする画像（64×64 または 64×32 の PNG）を選んでください。<br>
+  <small>写真アプリの画像は透明部分が失われることがあるので、「ファイル」から選ぶのがおすすめです。</small>
+  <label>画像を選ぶ<input id="pickfile" type="file" accept="image/png,image/*"></label>
+  <button id="pickcancel">キャンセル</button></div></div>
+<div id="snd">タップすると音が出ます</div>
+<div id="msg">接続しています…</div>
+<script>
+"use strict";
+const stage = document.getElementById("stage"), cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const kb = document.getElementById("kb"), inp = document.getElementById("in"), msg = document.getElementById("msg");
+const pick = document.getElementById("pick"), pickfile = document.getElementById("pickfile"), snd = document.getElementById("snd");
+let ws = null, replaced = false, rotated = false, L = 1, S = 1, vw = 1, vh = 1;
+
+// ---- layout: the game is always landscape; in portrait the picture is turned 90 degrees
+function layout() {
+  vw = window.innerWidth; vh = window.innerHeight;
+  rotated = vh > vw;
+  L = Math.max(vw, vh); S = Math.min(vw, vh);
+  stage.style.width = L + "px"; stage.style.height = S + "px";
+  stage.style.transform = rotated ? `translate(${vw}px,0) rotate(90deg)` : "none";
+  sendSize();
+}
+function sendSize() {
+  const d = window.devicePixelRatio || 1;
+  send(`s ${Math.round(L * d)} ${Math.round(S * d)}`);
+}
+window.addEventListener("resize", layout);
+window.addEventListener("orientationchange", () => setTimeout(layout, 300));
+
+function send(s) { if (ws && ws.readyState === 1) ws.send(s); }
+
+// ---- frames
+let busy = false, next = null;
+function show(blob) {
+  if (busy) { next = blob; return; }
+  busy = true;
+  createImageBitmap(blob).then(bmp => {
+    if (cv.width !== bmp.width || cv.height !== bmp.height) { cv.width = bmp.width; cv.height = bmp.height; }
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close && bmp.close();
+  }).catch(() => {}).finally(() => {
+    send("a");
+    busy = false;
+    if (next) { const b = next; next = null; show(b); }
+  });
+}
+
+// ---- touches -> 0..1 of the picture
+const slots = new Map();
+function pos(t) {
+  let x = t.clientX, y = t.clientY;
+  if (rotated) { const sx = y, sy = vw - x; x = sx; y = sy; }
+  return `${(x / L).toFixed(4)} ${(y / S).toFixed(4)}`;
+}
+function freeSlot() { for (let i = 0; i < 10; i++) if (![...slots.values()].includes(i)) return i; return -1; }
+function onTouch(e) {
+  unlockAudio();
+  if (e.target === inp || kb.contains(e.target) || pick.contains(e.target)) return;  // normal behaviour for these
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (e.type === "touchstart") {
+      const s = freeSlot();
+      if (s < 0) continue;
+      slots.set(t.identifier, s);
+      send(`d ${s} ${pos(t)}`);
+    } else {
+      const s = slots.get(t.identifier);
+      if (s === undefined) continue;
+      if (e.type === "touchmove") send(`m ${s} ${pos(t)}`);
+      else { send(`${e.type === "touchend" ? "u" : "c"} ${s} ${pos(t)}`); slots.delete(t.identifier); }
+    }
+  }
+}
+for (const n of ["touchstart", "touchmove", "touchend", "touchcancel"]) document.addEventListener(n, onTouch, { passive: false });
+document.addEventListener("gesturestart", e => e.preventDefault());
+
+// ---- text input with the phone's keyboard (iOS opens it only when the user taps a text box)
+let last = "", composing = false;
+function cps(s) { return Array.from(s); }
+function flush() {
+  const a = cps(last), b = cps(inp.value);
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  if (a.length - p > 0) send(`b ${a.length - p}`);
+  if (b.length - p > 0) send("t " + b.slice(p).join(""));
+  last = inp.value;
+}
+inp.addEventListener("compositionstart", () => { composing = true; });
+inp.addEventListener("compositionend", () => { composing = false; flush(); });
+inp.addEventListener("input", e => { if (!composing && !e.isComposing) flush(); });
+inp.addEventListener("keydown", e => {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === "Enter") { e.preventDefault(); flush(); send("e"); inp.value = ""; last = ""; }
+  else if (e.key === "Backspace" && inp.value === "") send("b 1");
+});
+function setKeyboard(on) {
+  kb.classList.toggle("on", on);
+  if (on) { inp.value = ""; last = ""; inp.focus(); }  // focus() only opens the keyboard on some iOS versions
+  else inp.blur();
+}
+
+// ---- sound: 16-bit stereo PCM scheduled with Web Audio (iOS starts audio only from a touch)
+let actx = null, nextT = 0;
+function unlockAudio() {
+  try {
+    if (!actx) {
+      if (navigator.audioSession) navigator.audioSession.type = "playback";  // play even in silent mode
+      const AC = window.AudioContext || window.webkitAudioContext;
+      actx = new AC({ latencyHint: "interactive" });
+    }
+    if (actx.state !== "running") actx.resume();
+  } catch (e) {}
+}
+function playPcm(buf) {
+  if (!actx || actx.state !== "running") return;
+  snd.style.display = "none";
+  const rate = new DataView(buf).getUint32(1, true);
+  const pcm = new Int16Array(buf.slice(5));
+  const n = pcm.length >> 1;
+  if (!n) return;
+  const ab = actx.createBuffer(2, n, rate), l = ab.getChannelData(0), r = ab.getChannelData(1);
+  for (let i = 0; i < n; i++) { l[i] = pcm[2 * i] / 32768; r[i] = pcm[2 * i + 1] / 32768; }
+  const src = actx.createBufferSource();
+  src.buffer = ab;
+  src.connect(actx.destination);
+  const now = actx.currentTime;
+  // keep about 60 ms queued: enough to ride out network jitter, little enough to stay in sync
+  if (nextT < now + 0.015 || nextT > now + 0.25) nextT = now + 0.06;
+  src.start(nextT);
+  nextT += n / rate;
+}
+document.addEventListener("touchend", unlockAudio, true);
+
+// ---- image picker (custom skin)
+pickfile.addEventListener("change", () => {
+  const f = pickfile.files && pickfile.files[0];
+  pickfile.value = "";
+  pick.classList.remove("on");
+  if (!f) { send("pc"); return; }
+  f.arrayBuffer().then(b => { if (ws && ws.readyState === 1) ws.send(b); }).catch(() => send("pc"));
+});
+document.getElementById("pickcancel").addEventListener("click", () => { pick.classList.remove("on"); send("pc"); });
+
+// ---- connection
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { msg.style.display = "none"; layout(); };
+  ws.onmessage = e => {
+    if (typeof e.data !== "string") {
+      const type = new Uint8Array(e.data, 0, 1)[0];
+      if (type === 1) show(new Blob([new Uint8Array(e.data, 1)], { type: "image/jpeg" }));
+      else if (type === 2) playPcm(e.data);
+      return;
+    }
+    if (e.data === "pick") { pick.classList.add("on"); return; }
+    if (e.data === "kb 1") setKeyboard(true);
+    else if (e.data === "kb 0") setKeyboard(false);
+    else if (e.data === "replaced") replaced = true;
+  };
+  ws.onclose = () => {
+    msg.style.display = "flex";
+    slots.clear(); busy = false; next = null;
+    setKeyboard(false);
+    pick.classList.remove("on");
+    if (replaced) {  // another phone / tab took over: do not take it back automatically
+      msg.textContent = "別の端末（またはタブ）が接続しました。ここをタップすると、この端末に切り替えます。";
+      msg.onclick = () => { msg.onclick = null; replaced = false; msg.textContent = "接続しています…"; connect(); };
+      return;
+    }
+    msg.textContent = location.hostname.startsWith("172.20.10.")
+      ? "切断されました。再接続しています…（USB 接続が切れた場合は、iPhone の「インターネット共有」の「ほかの人の接続を許可」を一度オフにしてからオンにしてください）"
+      : "切断されました。再接続しています…（PC でエミュレータが起動しているか確認してください）";
+    setTimeout(connect, 2000);
+  };
+}
+layout();
+connect();
+</script>
+</body>
+</html>
