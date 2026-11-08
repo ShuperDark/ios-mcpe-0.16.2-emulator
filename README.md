@@ -1,6 +1,6 @@
 # iOS MCPE (v0.16.2) Emulator
 
-Windows 11 (x64) 上で iOS 版 Minecraft Pocket Edition 0.16.2 (arm64) を動かすエミュレータです。
+Windows 10 / 11 (x64) 上で iOS 版 Minecraft Pocket Edition 0.16.2 (arm64) を動かすエミュレータです。
 iOS 全体ではなく、ゲームが使う部分だけを実装しています。
 
 ## 仕組み
@@ -16,12 +16,15 @@ iOS 全体ではなく、ゲームが使う部分だけを実装しています�
 | Objective-C ランタイム | 自作（`guest/libobjc`、objc_msgSend は arm64 アセンブリ） |
 | libdispatch, Foundation, CoreFoundation, UIKit, QuartzCore, EAGL, CoreGraphics, AudioToolbox など | 自作の最小実装（`guest/`、Objective-C） |
 | zlib | 公式ソースをゲスト用にビルド |
+| iPhone への画面出力 | 内蔵の HTTP / WebSocket サーバー（`remote.cpp`）から Safari に JPEG の映像と PCM の音声を送り、タッチと文字入力を受け取る |
+| Mod | `mods\*.dylib`（arm64）をゲームと一緒に読み込み、関数フックなどの API（`hle_mod.cpp`）を提供 |
 
 `guest/` 以下は zig 同梱の clang で arm64 Mach-O にビルドされ、エミュレータがゲームと一緒にロードします。
 ホスト ↔ ゲストの橋渡しは `svc #n` スタブ（`hle.h` の `HLE_FUNC` マクロ）です。
 
 ゲーム固有の調整：HockeyApp（クラッシュレポータ）は無効化。Xbox Live / Realms / ストアは使えません。
-LAN マルチプレイと、iPhone のブラウザへの画面出力・タッチ操作が使えます（下記）。
+PC 版と同じキーボード・マウス操作、LAN マルチプレイ（IP 指定での参加も可）、iPhone のブラウザへの画面出力・タッチ操作・音声（Wi-Fi / USB）、
+自分のスキン画像の取り込み、Mod が使えます（下記）。
 
 ## 必要なもの
 
@@ -174,7 +177,7 @@ Boost（Boost Software License 1.0）、zlib（zlib License）。ゲスト用 li
 
 エミュレータ自体のファイル：`iOSMCPE-Emulator.exe` と同じフォルダの `guest\`（ゲームと一緒に読み込む自作の iOS ランタイム）と `remote.html`（iPhone に表示するページ）。
 
-オプション: `--ipa <file>` / `--app <展開済み .app>` / `--data <データフォルダ>` / `-v`（詳細ログ）
+オプション: `--ipa <file>` / `--app <展開済み .app>` / `--data <データフォルダ>` / `--guest-libs <フォルダ>`（既定は exe の隣の `guest\`）/ `-v`（詳細ログ）/ `-vv`（さらに詳細）
 
 ### 操作（PC 版と同じ配置）
 
@@ -241,7 +244,8 @@ pc_audio    = false        ; iPhone 接続中も PC から音を出す (false = 
 
 - 動作名: forward, back, left, right, jump, sneak, sprint, attack, use, inventory, chat, drop, perspective, hide_gui, hotbar1〜hotbar9
 - ゲーム内部のボタン名（例: `button.sneak_toggle = Z`）も直接書けます
-- 保存すると、次に画面を開閉したとき（ワールドに入る、インベントリを閉じるなど）に反映されます
+- `[controls]`・`[mouse]`・`[ui]`・`max_fps` は、保存したあと次に画面を開閉したとき（ワールドに入る、インベントリを閉じるなど）に反映されます
+- `fullscreen`・`vsync`・`[remote]` は、次回の起動時に反映されます
 - Esc（ポーズ / 画面を閉じる）は固定です。ファイルを消すと初期設定（説明付き）で作り直されます
 - 書かれていない項目は初期値になります
 
@@ -256,6 +260,7 @@ iPhone が接続している間は、この設定にかかわらずポケット�
 
 F11 または Alt+Enter でボーダーレスのフルスクリーンに切り替わり、ゲームの描画解像度もモニタに合わせて変わります。
 フレームは 1ms 精度のタイマーで `max_fps` に合わせて出します。既定（auto）ではモニタのリフレッシュレート（例: 165Hz なら 165fps）です。
+iPhone が接続している間は、`max_fps` にかかわらず 60fps になります（下記）。
 
 ### マルチプレイ（LAN）
 
@@ -387,7 +392,7 @@ Visual Studio の「新しいプロジェクトの作成」から作る場合は
 | `EMU_TRACE_EXCEPTIONS=1` | ホスト側の first-chance 例外と直前の GL 呼び出しを出力 |
 | `EMU_LOOP_STATS=1` | メインループ/描画回数の統計 |
 | `EMU_NO_AUDIO=1` | 音声を無効化 |
-| `EMU_NO_MOUSELOOK=1` | マウスの固定（視点操作）を無効化し、常にタッチとして扱う |
+| `EMU_NO_MOUSELOOK=1` | ワールド内でもマウスを固定しない（マウスでの視点操作は無効になります） |
 | `EMU_NO_GAME_KEYS=1` | キーをゲームに渡さない |
 | `EMU_TOUCH_MENUS=1` | 画面表示中のマウスをタッチとして扱う（以前の動作） |
 | `EMU_SHOW_FPS=1` | タイトルバーにフレームレートを表示（`-v` ではログにも出力） |
@@ -395,9 +400,11 @@ Visual Studio の「新しいプロジェクトの作成」から作る場合は
 | `EMU_PROFILE=<秒>` | サンプリングプロファイラ。指定秒ごとにスレッド別の内訳（ゲームのコード / JIT コンパイラ / HLE / OS）、時間のかかった HLE 関数、50ms を超えたフレームを `emulator.log` に出力 |
 | `EMU_NCPU=<数>` | ゲームに見せる CPU 数（地形生成などのワーカースレッド数。既定は論理 CPU 数の半分、2〜8） |
 | `EMU_OFFLINE=1` | ネットワークに接続していないことにする（LAN マルチプレイも無効） |
+| `EMU_NO_IFADDRS=1` | ゲームにネットワークアダプターの一覧を見せない（LAN の問題の切り分け用） |
+| `EMU_TRACE_KEYCHAIN=1` | キーチェーン（端末 ID などの保存）へのアクセスをログに出力 |
 
 ## 既知の制限
 
 - 起動やワールドの読み込み、初めて開く画面では、ゲームのコードを初めて JIT コンパイルするため一時的に止まることがあります
-- Xbox Live サインイン、Realms、ストア、スキンの画像取り込みは使えません
+- Xbox Live サインイン、Realms、ストア（スキンパックの購入を含む）は使えません。自分で用意したスキン画像は使えます（「スキンの変更」を参照）
 - 稀にタイミング依存のクラッシュが起きることがあります（`emulator.log` に状態が出ます）
