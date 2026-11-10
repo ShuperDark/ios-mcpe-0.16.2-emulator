@@ -26,9 +26,13 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 # optimizations - unoptimized it needs seconds to translate code the game runs for the
 # first time (startup 15 s instead of 1 s, world loading 45 s instead of 8 s).
 # Mixing optimization levels needs /RTC off and the same iterator debug level everywhere.
+# /Od and /Ob0 are removed from the global Debug flags too (the emulator target adds them
+# back itself), otherwise every JIT source warns "D9025: overriding '/Od' with '/O2'".
 if (MSVC)
   foreach(lang C CXX)
-    string(REPLACE "/RTC1" "" CMAKE_${lang}_FLAGS_DEBUG "${CMAKE_${lang}_FLAGS_DEBUG}")
+    foreach(flag /RTC1 /Od /Ob0)
+      string(REPLACE "${flag}" "" CMAKE_${lang}_FLAGS_DEBUG "${CMAKE_${lang}_FLAGS_DEBUG}")
+    endforeach()
   endforeach()
   add_compile_definitions($<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=0>)
 endif()
@@ -42,3 +46,6 @@ if (MSVC)
 endif()
 
 add_subdirectory ("iOS MCPE(v0.16.2) Emulator")
+
+# Generated .sln/.slnx (preset "vs-solution"): F5 starts the emulator, not ALL_BUILD.
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT CMakeTarget)

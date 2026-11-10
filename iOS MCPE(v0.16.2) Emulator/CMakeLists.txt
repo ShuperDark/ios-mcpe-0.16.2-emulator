@@ -47,6 +47,8 @@ target_compile_features(CMakeTarget PRIVATE cxx_std_20)
 target_compile_definitions(CMakeTarget PRIVATE _CRT_SECURE_NO_WARNINGS UNICODE _UNICODE)
 if (MSVC)
   target_compile_options(CMakeTarget PRIVATE /utf-8 /W3 /permissive- /Zc:preprocessor /bigobj)
+  # unoptimized Debug build of the emulator itself (removed from the global flags, see the top CMakeLists.txt)
+  target_compile_options(CMakeTarget PRIVATE $<$<CONFIG:Debug>:/Od /Ob0>)
   target_link_options(CMakeTarget PRIVATE /STACK:16777216)
   # symbols for the sampling profiler (EMU_PROFILE) also in release builds
   target_compile_options(CMakeTarget PRIVATE $<$<CONFIG:Release>:/Zi>)

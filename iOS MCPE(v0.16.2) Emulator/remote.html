@@ -43,8 +43,8 @@
 <div id="stage"><canvas id="c" width="16" height="9"></canvas></div>
 <div id="kb"><span>文字入力</span><input id="in" type="text" autocomplete="off" autocorrect="off" autocapitalize="off"
      spellcheck="false" enterkeyhint="send" placeholder="ここをタップして入力"></div>
-<div id="pick"><div>スキンにする画像（64×64 または 64×32 の PNG）を選んでください。<br>
-  <small>写真アプリの画像は透明部分が失われることがあるので、「ファイル」から選ぶのがおすすめです。</small>
+<div id="pick"><div><span id="picktext">スキンにする画像（64×64 または 64×32 の PNG）を選んでください。<br>
+  <small>写真アプリの画像は透明部分が失われることがあるので、「ファイル」から選ぶのがおすすめです。</small></span>
   <label>画像を選ぶ<input id="pickfile" type="file" accept="image/png,image/*"></label>
   <button id="pickcancel">キャンセル</button></div></div>
 <div id="snd">タップすると音が出ます</div>
@@ -54,6 +54,7 @@
 const stage = document.getElementById("stage"), cv = document.getElementById("c"), ctx = cv.getContext("2d");
 const kb = document.getElementById("kb"), inp = document.getElementById("in"), msg = document.getElementById("msg");
 const pick = document.getElementById("pick"), pickfile = document.getElementById("pickfile"), snd = document.getElementById("snd");
+const skinPickText = document.getElementById("picktext").innerHTML;
 let ws = null, replaced = false, rotated = false, L = 1, S = 1, vw = 1, vh = 1;
 
 // ---- layout: the game is always landscape; in portrait the picture is turned 90 degrees
@@ -198,7 +199,16 @@ function connect() {
       else if (type === 2) playPcm(e.data);
       return;
     }
-    if (e.data === "pick") { pick.classList.add("on"); return; }
+    if (e.data === "pick cancel") { pick.classList.remove("on"); return; }
+    if (e.data === "pick" || e.data === "pick media") {
+      const media = e.data === "pick media";
+      document.getElementById("picktext").innerHTML = media
+        ? "写真・画像・GIF を選んでください。<br><small>GIF のアニメーションを使うときは「ファイル」から選んでください（写真アプリからは静止画になることがあります）。</small>"
+        : skinPickText;
+      pickfile.accept = media ? "image/*" : "image/png,image/*";
+      pick.classList.add("on");
+      return;
+    }
     if (e.data === "kb 1") setKeyboard(true);
     else if (e.data === "kb 0") setKeyboard(false);
     else if (e.data === "replaced") replaced = true;

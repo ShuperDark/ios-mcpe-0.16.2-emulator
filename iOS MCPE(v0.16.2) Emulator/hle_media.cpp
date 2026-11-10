@@ -187,5 +187,8 @@ HLE_FUNC(emu_audio_close, void, ()) {
 
 // ===================================================================== image picker (custom skins)
 HLE_FUNC(emu_pick_image_begin, void, ()) { remote::pick_image_begin(); }
+// for mods: any picture (PNG / JPEG / BMP / GIF), answered through emu_pick_image_poll / take
+HLE_FUNC(emu_pick_media_begin, void, ()) { remote::pick_image_begin(remote::kPickMedia); }
+HLE_FUNC(emu_pick_image_cancel, void, ()) { remote::pick_image_cancel(); }
 HLE_FUNC(emu_pick_image_poll, int, (size_t* len)) { return remote::pick_image_poll(len); }
 HLE_FUNC(emu_pick_image_take, void, (void* out)) { remote::pick_image_take(out); }

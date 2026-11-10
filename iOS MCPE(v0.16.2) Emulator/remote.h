@@ -23,10 +23,14 @@ std::string url();             // e.g. "http://192.168.1.10:8080" (empty when no
 // stay silent ([remote] pc_audio = false while a phone is connected).
 bool audio(const s16* samples, int frames, int rate);
 
-// Image picker for custom skins: the connected phone's photo / file picker, otherwise a
-// Windows file dialog. poll: 0 pending, 1 done (*len bytes ready for take), -1 cancelled.
-void pick_image_begin();
+// Image picker: the connected phone's photo / file picker, otherwise a Windows file dialog.
+// kind 0 = custom skin (PNG), 1 = any picture for mods (PNG / JPEG / BMP / GIF; the file's
+// bytes are returned as they are). poll: 0 pending, 1 done (*len bytes ready for take),
+// -1 cancelled.
+enum PickKind { kPickSkin = 0, kPickMedia = 1 };
+void pick_image_begin(int kind = kPickSkin);
 int pick_image_poll(size_t* len);
 void pick_image_take(void* out);
+void pick_image_cancel();  // closes the picker that is still open (its answer is dropped)
 
 }  // namespace remote

@@ -30,6 +30,17 @@ int emu_hook(uint64_t target, uint64_t replacement, uint64_t* original);
 // Window title.
 void emu_set_title(const char* title);
 
+// Picture picker: a Windows file dialog, or the photo / file picker of the phone connected
+// to the remote screen. emu_pick_media_begin() asks for a picture (PNG / JPEG / BMP / GIF)
+// and returns at once; then call emu_pick_image_poll() (from the game's thread, e.g. once a
+// frame) until it is not 0: 1 = done, *len bytes ready (copy them with emu_pick_image_take),
+// -1 = cancelled. The file's bytes are returned as they are (decode them yourself).
+// emu_pick_image_cancel() closes a picker that is still open (its answer is dropped).
+void emu_pick_media_begin(void);
+int emu_pick_image_poll(size_t* len);
+void emu_pick_image_take(void* out);
+void emu_pick_image_cancel(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -11,6 +11,8 @@
 //      "kb 1" / "kb 0"   <- the game opened / closed a text field
 //      "pick"            <- the game wants an image (custom skin); the phone answers with
 //      binary / "pc"        the file's bytes, or "pc" when cancelled
+//      "pick media"      <- the same for a mod that takes any picture (PNG / JPEG / GIF)
+//      "pick cancel"     <- the game no longer wants the picture (hide the picker)
 //
 // Threads: the network thread accepts connections and reads messages; the encoder
 // thread turns frames into JPEG (WIC) and sends them; window::present (main thread)
@@ -60,6 +62,7 @@ std::atomic<bool> g_usb_peer{false};     // the phone is connected through USB (
 // image picker (custom skin): 0 idle, 1 pending, 2 picked, 3 cancelled
 std::mutex g_pick_lock;
 int g_pick_state = 0;
+int g_pick_kind = kPickSkin;
 bool g_pick_on_phone = false;
 std::vector<u8> g_pick_data;
 void pick_finish(std::vector<u8>* data) {
@@ -855,42 +858,81 @@ bool audio(const s16* samples, int frames, int rate) {
 
 // ---------------------------------------------------------------- image picker
 namespace {
-void pc_file_dialog() {
+std::atomic<DWORD> g_dialog_thread{0};  // thread showing the PC file dialog (0 = none)
+
+void pc_file_dialog(int kind) {
+    g_dialog_thread = GetCurrentThreadId();
     wchar_t file[MAX_PATH] = {};
     OPENFILENAMEW ofn{sizeof ofn};
     ofn.hwndOwner = (HWND)window::native_handle();
-    ofn.lpstrFilter = L"スキン画像 (*.png)\0*.png\0画像 (*.png;*.jpg;*.jpeg;*.bmp)\0*.png;*.jpg;*.jpeg;*.bmp\0";
+    if (kind == kPickMedia) {
+        ofn.lpstrFilter = L"画像・GIF (*.png;*.jpg;*.jpeg;*.gif;*.bmp)\0*.png;*.jpg;*.jpeg;*.gif;*.bmp\0すべてのファイル (*.*)\0*.*\0";
+        ofn.lpstrTitle = L"画像・GIF を選択";
+    } else {
+        ofn.lpstrFilter = L"スキン画像 (*.png)\0*.png\0画像 (*.png;*.jpg;*.jpeg;*.bmp)\0*.png;*.jpg;*.jpeg;*.bmp\0";
+        ofn.lpstrTitle = L"スキンの画像を選択 (64x64 または 64x32 の PNG)";
+    }
     ofn.lpstrFile = file;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = L"スキンの画像を選択 (64x64 または 64x32 の PNG)";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    const size_t limit = kind == kPickMedia ? (32u << 20) : (16u << 20);
     std::vector<u8> data;
     if (GetOpenFileNameW(&ofn)) {
         if (FILE* f = _wfopen(file, L"rb")) {
             u8 b[65536];
             size_t n;
-            while ((n = fread(b, 1, sizeof b, f)) > 0 && data.size() < (16u << 20)) data.insert(data.end(), b, b + n);
+            while ((n = fread(b, 1, sizeof b, f)) > 0 && data.size() <= limit) data.insert(data.end(), b, b + n);
             fclose(f);
         }
-        LOGI("remote: picked %s (%zu bytes)", narrow(file).c_str(), data.size());
+        if (data.size() > limit) {
+            LOGW("remote: %s is larger than %zu MB, not used", narrow(file).c_str(), limit >> 20);
+            data.clear();
+        } else {
+            LOGI("remote: picked %s (%zu bytes)", narrow(file).c_str(), data.size());
+        }
     }
+    g_dialog_thread = 0;
     pick_finish(&data);
+}
+
+BOOL CALLBACK close_dialog(HWND w, LPARAM) {
+    wchar_t cls[16] = {};
+    GetClassNameW(w, cls, 16);
+    if (!wcscmp(cls, L"#32770")) PostMessageW(w, WM_COMMAND, IDCANCEL, 0);
+    return TRUE;
 }
 }  // namespace
 
-void pick_image_begin() {
+void pick_image_cancel() {
+    bool phone;
+    {
+        std::lock_guard lk(g_pick_lock);
+        if (g_pick_state != 1) return;
+        g_pick_state = 0;  // a late answer is ignored (pick_finish only takes pending requests)
+        phone = g_pick_on_phone;
+    }
+    LOGI("remote: image picker cancelled by the game");
+    if (phone) {
+        ws_text("pick cancel");
+    } else if (DWORD t = g_dialog_thread) {
+        EnumThreadWindows(t, close_dialog, 0);
+    }
+}
+
+void pick_image_begin(int kind) {
     {
         std::lock_guard lk(g_pick_lock);
         if (g_pick_state == 1) return;
         g_pick_state = 1;
+        g_pick_kind = kind;
         g_pick_data.clear();
         g_pick_on_phone = g_connected;
     }
     if (g_pick_on_phone) {
         LOGI("remote: asking the phone for an image");
-        ws_text("pick");
+        ws_text(kind == kPickMedia ? "pick media" : "pick");
     } else {
-        std::thread(pc_file_dialog).detach();
+        std::thread(pc_file_dialog, kind).detach();
     }
 }
 

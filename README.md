@@ -57,12 +57,25 @@ git clone <このリポジトリの URL> "iOS MCPE(v0.16.2) Emulator"
 ### 2. Visual Studio で開く
 
 1. Visual Studio を起動し、「ローカル フォルダーを開く」（または「ファイル → 開く → フォルダー」）でリポジトリのフォルダを開きます。
-   `.sln` はありません（CMake プロジェクトです）
+   （CMake プロジェクトです。`.sln` で開きたい場合は下の「ソリューションで開く」を参照）
 2. CMake の構成が自動で始まります。出力ウィンドウに `CMake generation finished` と出るまで待ちます（初回は数分）
 3. ツールバーで構成を選びます
    - `x64 Debug`：エミュレータ本体を最適化なしでビルド（ブレークポイント・ステップ実行用。JIT だけは最適化されるので、動作は Release とほぼ同じ速さです）
    - `x64 Release`：遊ぶとき・速度を測るとき
+   - `Visual Studio solution (.sln / .slnx)` はフォルダー表示では使いません（下の `make_sln.bat` 用）
 4. スタートアップ項目（▶ の横）で `iOSMCPE-Emulator.exe` を選びます（CMake のターゲット名は `CMakeTarget`）
+
+#### ソリューション（.slnx / .sln）で開く
+
+従来の Visual Studio ソリューションとして開きたい場合は、リポジトリの `make_sln.bat` をダブルクリックします。
+`out\build\vs-solution\` にソリューションが作られ、Visual Studio で開きます
+（Visual Studio 2026 では `iOS MCPE(v0.16.2) Emulator.slnx`、2022 では `.sln`。インストールされている最新の Visual Studio が使われます）。
+
+- スタートアップ プロジェクトは最初から `CMakeTarget`（`iOSMCPE-Emulator.exe`）なので、構成（`Debug` / `Release`）を選んで F5 でデバッグできます
+- ゲスト用ライブラリのビルドとコピーも、ソリューションのビルドに含まれています
+- できた exe：`out\build\vs-solution\iOS MCPE(v0.16.2) Emulator\Debug\iOSMCPE-Emulator.exe`（Release は `Release\`）
+- コマンドライン引数は、ソリューション エクスプローラーで `CMakeTarget` を右クリック →「プロパティ → デバッグ → コマンド引数」に書きます
+- `CMakeLists.txt` を変更したときは、ビルド時に自動で再生成されます（ファイルを追加したときも `CMakeLists.txt` に書けば反映されます）
 
 ### 3. ビルド・実行・デバッグ
 
@@ -95,6 +108,7 @@ git clone <このリポジトリの URL> "iOS MCPE(v0.16.2) Emulator"
 ```bat
 build.bat            :: Release
 build.bat debug      :: Debug
+make_sln.bat         :: Visual Studio ソリューションを作って開く
 ```
 
 ### デバッグ実行を軽くするには
@@ -362,7 +376,9 @@ Wi-Fi より遅延が少なくなります。iPhone 側にアプリは不要で�
 Mod はゲームと同じ形式（arm64 の Mach-O dylib）のプログラムで、`mods\` フォルダに置くとゲームと一緒に読み込まれます。
 `__attribute__((constructor))` を付けた関数がゲームの初期化より先に実行され、ゲームと同じ関数（libc、libc++、
 Foundation / Objective-C ランタイム、ゲーム自身の関数）と、エミュレータの Mod 用関数（`mod-template\include\emu_mod.h`：
-ログ出力 `emu_log`、関数フック `emu_hook`、`emu_game_base`、`emu_set_title`）を使えます。
+ログ出力 `emu_log`、関数フック `emu_hook`、`emu_game_base`、`emu_set_title`、画像の選択 `emu_pick_media_begin` /
+`emu_pick_image_poll` / `emu_pick_image_take` / `emu_pick_image_cancel`（PC ではファイル選択画面、iPhone 接続中は
+iPhone の写真・ファイル選択。PNG / JPEG / BMP / GIF のファイルの中身をそのまま受け取ります））を使えます。
 
 ### Visual Studio のプロジェクト
 
