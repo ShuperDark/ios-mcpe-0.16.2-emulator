@@ -40,6 +40,7 @@ add_executable(CMakeTarget
     hle_crypto.cpp
     hle_mod.cpp
     remote.cpp
+    sound_codecs.cpp
 )
 
 set_target_properties(CMakeTarget PROPERTIES OUTPUT_NAME "iOSMCPE-Emulator")

@@ -52,7 +52,7 @@ git clone <このリポジトリの URL> "iOS MCPE(v0.16.2) Emulator"
 ```
 
 `ipa\` フォルダに .ipa を置きます（例: `ipa\Minecraft PE 0.16.2.ipa`。ファイル名は自由です）。
-外部ソース（dynarmic とその依存ライブラリ、Boost ヘッダ、zlib）は `external\` に入っているので、追加のダウンロードは不要です。
+外部ソース（dynarmic とその依存ライブラリ、Boost ヘッダ、zlib、minimp3、stb_vorbis）は `external\` に入っているので、追加のダウンロードは不要です。
 
 ### 2. Visual Studio で開く
 
@@ -155,7 +155,7 @@ exe を配布する場合（GitHub の Releases など）は、`iOSMCPE-Emulator
 使う人は exe の隣（またはその親フォルダ）の `ipa\` に自分の .ipa を置きます。
 
 第三者のソースのライセンス：dynarmic（0BSD）、fmt / mcl / robin-map / zycore / zydis（MIT）、xbyak（BSD-3-Clause）、
-Boost（Boost Software License 1.0）、zlib（zlib License）。ゲスト用 libc++ は zig に同梱の LLVM libc++（Apache-2.0 WITH LLVM-exception）からビルドします。
+Boost（Boost Software License 1.0）、zlib（zlib License）、minimp3（CC0）、stb_vorbis（MIT またはパブリックドメイン）。ゲスト用 libc++ は zig に同梱の LLVM libc++（Apache-2.0 WITH LLVM-exception）からビルドします。
 このプロジェクト自体（`external\` 以外）は MIT License です（`LICENSE`）。
 
 ## 実行
@@ -378,7 +378,11 @@ Mod はゲームと同じ形式（arm64 の Mach-O dylib）のプログラムで
 Foundation / Objective-C ランタイム、ゲーム自身の関数）と、エミュレータの Mod 用関数（`mod-template\include\emu_mod.h`：
 ログ出力 `emu_log`、関数フック `emu_hook`、`emu_game_base`、`emu_set_title`、画像の選択 `emu_pick_media_begin` /
 `emu_pick_image_poll` / `emu_pick_image_take` / `emu_pick_image_cancel`（PC ではファイル選択画面、iPhone 接続中は
-iPhone の写真・ファイル選択。PNG / JPEG / BMP / GIF のファイルの中身をそのまま受け取ります））を使えます。
+iPhone の写真・ファイル選択。PNG / JPEG / BMP / GIF のファイルの中身をそのまま受け取ります）、MMD モデルの選択
+`emu_pick_model_begin`（PC で .pmx / .pmd を選ぶとフォルダごと ZIP にまとめて渡し、.zip はそのまま渡します。iPhone 接続中は
+ファイルアプリで選んだ .zip などをそのまま渡します。受け取りは画像と同じ `emu_pick_image_poll` / `emu_pick_image_take`）、
+音声ファイル（.mp3 / .ogg）の選択 `emu_pick_sound_begin`、音声の再生 `emu_sound_load` / `emu_sound_play` / `emu_sound_stop` /
+`emu_sound_playing` / `emu_sound_free`（MP3 / Ogg Vorbis をエミュレータ側でデコードし、ゲームの音声に混ぜて PC と iPhone に出します））を使えます。
 
 ### Visual Studio のプロジェクト
 

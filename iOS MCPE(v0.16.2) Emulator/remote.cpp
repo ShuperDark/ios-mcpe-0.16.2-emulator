@@ -12,6 +12,7 @@
 //      "pick"            <- the game wants an image (custom skin); the phone answers with
 //      binary / "pc"        the file's bytes, or "pc" when cancelled
 //      "pick media"      <- the same for a mod that takes any picture (PNG / JPEG / GIF)
+//      "pick model"      <- the same for a mod that takes an MMD model (.zip / .pmx / .pmd)
 //      "pick cancel"     <- the game no longer wants the picture (hide the picker)
 //
 // Threads: the network thread accepts connections and reads messages; the encoder
@@ -579,7 +580,7 @@ bool read_frames(std::string& buf) {
             for (int i = 0; i < 8; i++) len = len << 8 | p[2 + i];
             hn = 10;
         }
-        if (len > (16u << 20)) return false;
+        if (len > (256u << 20)) return false;  // the largest message: a picked MMD model
         size_t total = hn + (masked ? 4 : 0) + (size_t)len;
         if (buf.size() < total) return true;
         std::string payload = buf.substr(hn + (masked ? 4 : 0), (size_t)len);
@@ -860,12 +861,119 @@ bool audio(const s16* samples, int frames, int rate) {
 namespace {
 std::atomic<DWORD> g_dialog_thread{0};  // thread showing the PC file dialog (0 = none)
 
+constexpr size_t kModelLimit = 256u << 20;  // a model with its textures (also the phone's message limit)
+
+bool read_whole(const std::wstring& path, std::vector<u8>& out, size_t limit) {
+    FILE* f = _wfopen(path.c_str(), L"rb");
+    if (!f) return false;
+    u8 b[65536];
+    size_t n;
+    out.clear();
+    while ((n = fread(b, 1, sizeof b, f)) > 0 && out.size() <= limit) out.insert(out.end(), b, b + n);
+    fclose(f);
+    return out.size() <= limit;
+}
+
+u32 crc32(const u8* p, size_t n) {
+    static u32 table[256];
+    if (!table[1])
+        for (u32 i = 0; i < 256; i++) {
+            u32 c = i;
+            for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
+    u32 c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) c = table[(c ^ p[i]) & 255] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+// The picked model and the other files of its folder (and sub folders: textures are often in
+// "tex\"), as a ZIP archive without compression. Names are UTF-8, relative to the folder.
+std::vector<u8> zip_model_folder(const std::wstring& model) {
+    size_t slash = model.find_last_of(L"\\/");
+    std::wstring dir = slash == std::wstring::npos ? L"." : model.substr(0, slash);
+    std::vector<std::wstring> files{model.substr(slash + 1)};
+    std::vector<std::wstring> pending{L""};
+    while (!pending.empty() && files.size() < 4000) {
+        std::wstring rel = pending.back();
+        pending.pop_back();
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((dir + L"\\" + rel + L"*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            std::wstring name = fd.cFileName;
+            if (name == L"." || name == L"..") continue;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (std::count(rel.begin(), rel.end(), L'\\') < 4) pending.push_back(rel + name + L"\\");
+            } else if (rel + name != files[0]) {
+                files.push_back(rel + name);
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    std::vector<u8> zip, central;
+    auto put16 = [](std::vector<u8>& v, u32 x) { v.push_back(u8(x)); v.push_back(u8(x >> 8)); };
+    auto put32 = [&](std::vector<u8>& v, u32 x) { put16(v, x & 0xFFFF); put16(v, x >> 16); };
+    int count = 0;
+    for (const std::wstring& rel : files) {
+        std::vector<u8> data;
+        if (!read_whole(dir + L"\\" + rel, data, 64u << 20)) continue;  // skips huge files
+        if (zip.size() + data.size() > kModelLimit) break;
+        std::string name = narrow(rel);
+        std::replace(name.begin(), name.end(), '\\', '/');
+        u32 crc = crc32(data.data(), data.size()), off = (u32)zip.size();
+        // local header: version 20, flags 0x800 (UTF-8 name), stored
+        put32(zip, 0x04034b50); put16(zip, 20); put16(zip, 0x800); put16(zip, 0); put32(zip, 0);
+        put32(zip, crc); put32(zip, (u32)data.size()); put32(zip, (u32)data.size());
+        put16(zip, (u32)name.size()); put16(zip, 0);
+        zip.insert(zip.end(), name.begin(), name.end());
+        zip.insert(zip.end(), data.begin(), data.end());
+        put32(central, 0x02014b50); put16(central, 20); put16(central, 20); put16(central, 0x800); put16(central, 0);
+        put32(central, 0); put32(central, crc); put32(central, (u32)data.size()); put32(central, (u32)data.size());
+        put16(central, (u32)name.size()); put16(central, 0); put16(central, 0); put16(central, 0); put16(central, 0);
+        put32(central, 0); put32(central, off);
+        central.insert(central.end(), name.begin(), name.end());
+        count++;
+    }
+    u32 cdOff = (u32)zip.size();
+    zip.insert(zip.end(), central.begin(), central.end());
+    put32(zip, 0x06054b50); put16(zip, 0); put16(zip, 0); put16(zip, (u32)count); put16(zip, (u32)count);
+    put32(zip, (u32)central.size()); put32(zip, cdOff); put16(zip, 0);
+    LOGI("remote: packed %d file(s) of %s (%zu bytes)", count, narrow(dir).c_str(), zip.size());
+    return count ? zip : std::vector<u8>();
+}
+
 void pc_file_dialog(int kind) {
     g_dialog_thread = GetCurrentThreadId();
     wchar_t file[MAX_PATH] = {};
     OPENFILENAMEW ofn{sizeof ofn};
     ofn.hwndOwner = (HWND)window::native_handle();
-    if (kind == kPickMedia) {
+    if (kind == kPickModel) {
+        ofn.lpstrFilter = L"MMD モデル (*.pmx;*.pmd;*.zip)\0*.pmx;*.pmd;*.zip\0すべてのファイル (*.*)\0*.*\0";
+        ofn.lpstrTitle = L"MMD モデルを選択 (.pmx / .pmd、またはモデルのフォルダを圧縮した .zip)";
+        ofn.lpstrFile = file;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        std::vector<u8> data;
+        if (GetOpenFileNameW(&ofn)) {
+            std::wstring path = file, ext = path.size() > 4 ? path.substr(path.size() - 4) : L"";
+            for (auto& c : ext) c = (wchar_t)towlower(c);
+            if (ext == L".pmx" || ext == L".pmd") {
+                data = zip_model_folder(path);
+            } else if (!read_whole(path, data, kModelLimit)) {
+                LOGW("remote: %s is larger than %zu MB, not used", narrow(path).c_str(), kModelLimit >> 20);
+                data.clear();
+            }
+            LOGI("remote: picked %s (%zu bytes)", narrow(path).c_str(), data.size());
+        }
+        g_dialog_thread = 0;
+        pick_finish(&data);
+        return;
+    }
+    if (kind == kPickSound) {
+        ofn.lpstrFilter = L"音声 (*.mp3;*.ogg)\0*.mp3;*.ogg\0すべてのファイル (*.*)\0*.*\0";
+        ofn.lpstrTitle = L"音声ファイルを選択 (.mp3 / .ogg)";
+    } else if (kind == kPickMedia) {
         ofn.lpstrFilter = L"画像・GIF (*.png;*.jpg;*.jpeg;*.gif;*.bmp)\0*.png;*.jpg;*.jpeg;*.gif;*.bmp\0すべてのファイル (*.*)\0*.*\0";
         ofn.lpstrTitle = L"画像・GIF を選択";
     } else {
@@ -930,7 +1038,7 @@ void pick_image_begin(int kind) {
     }
     if (g_pick_on_phone) {
         LOGI("remote: asking the phone for an image");
-        ws_text(kind == kPickMedia ? "pick media" : "pick");
+        ws_text(kind == kPickModel ? "pick model" : kind == kPickSound ? "pick sound" : kind == kPickMedia ? "pick media" : "pick");
     } else {
         std::thread(pc_file_dialog, kind).detach();
     }

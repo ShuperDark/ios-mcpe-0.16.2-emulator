@@ -12,6 +12,8 @@
 
 #include <condition_variable>
 #include <deque>
+#include <map>
+#include <memory>
 #include <mutex>
 
 #pragma comment(lib, "windowscodecs.lib")
@@ -145,7 +147,100 @@ HLE_FUNC(emu_audio_open, int, (int rate, int channels)) {
     return 1;
 }
 
+// ===================================================================== sounds of mods
+// emu_sound_load decodes an MP3 / Ogg Vorbis file once; emu_sound_play mixes it into the
+// game's audio output (emu_audio_write), so it also reaches a connected phone.
+bool decode_audio(const uint8_t* data, size_t len, std::vector<int16_t>& out, int& channels, int& rate);
+namespace {
+struct ModSound {
+    std::vector<int16_t> pcm;  // interleaved stereo
+    int rate = 44100;
+};
+struct ModVoice {
+    int id;
+    std::shared_ptr<ModSound> sound;
+    double pos = 0;  // in source frames
+    float volume = 1;
+};
+std::mutex g_slock;
+std::map<int, std::shared_ptr<ModSound>> g_sounds;
+std::vector<ModVoice> g_voices;
+int g_next_sound = 1, g_next_voice = 1;
+
+// adds the playing sounds to `buf` (stereo, `rate`); false if none plays
+bool mix_mod_sounds(int16_t* buf, int frames, int rate) {
+    std::lock_guard lk(g_slock);
+    if (g_voices.empty()) return false;
+    for (auto& v : g_voices) {
+        const auto& pcm = v.sound->pcm;
+        size_t n = pcm.size() / 2;
+        double step = (double)v.sound->rate / rate;
+        for (int f = 0; f < frames; f++) {
+            size_t i = (size_t)v.pos;
+            if (i >= n) break;
+            double t = v.pos - i;
+            for (int c = 0; c < 2; c++) {
+                float a = pcm[i * 2 + c], b = i + 1 < n ? pcm[(i + 1) * 2 + c] : a;
+                float s = buf[f * 2 + c] + (float)(a + (b - a) * t) * v.volume;
+                buf[f * 2 + c] = (int16_t)(s > 32767 ? 32767 : s < -32768 ? -32768 : s);
+            }
+            v.pos += step;
+        }
+    }
+    std::erase_if(g_voices, [](const ModVoice& v) { return (size_t)v.pos >= v.sound->pcm.size() / 2; });
+    return true;
+}
+}  // namespace
+
+HLE_FUNC(emu_sound_load, int, (const void* data, size_t len)) {
+    std::vector<int16_t> pcm;
+    int ch = 0, rate = 0;
+    if (!data || !len || !decode_audio((const uint8_t*)data, len, pcm, ch, rate) || rate <= 0) {
+        LOGW("sound: cannot decode a sound of %zu bytes (MP3 / Ogg Vorbis only)", len);
+        return 0;
+    }
+    auto s = std::make_shared<ModSound>();
+    s->rate = rate;
+    if (ch == 1) {
+        s->pcm.resize(pcm.size() * 2);
+        for (size_t i = 0; i < pcm.size(); i++) s->pcm[i * 2] = s->pcm[i * 2 + 1] = pcm[i];
+    } else {
+        s->pcm = std::move(pcm);
+    }
+    std::lock_guard lk(g_slock);
+    int id = g_next_sound++;
+    g_sounds[id] = s;
+    LOGI("sound: loaded #%d (%.2f s, %d Hz, %d channel(s))", id, s->pcm.size() / 2.0 / rate, rate, ch);
+    return id;
+}
+HLE_FUNC(emu_sound_free, void, (int sound)) {
+    std::lock_guard lk(g_slock);
+    g_sounds.erase(sound);  // a voice that still plays it keeps it
+}
+HLE_FUNC(emu_sound_play, int, (int sound, float volume)) {
+    std::lock_guard lk(g_slock);
+    auto it = g_sounds.find(sound);
+    if (it == g_sounds.end()) return 0;
+    ModVoice v{g_next_voice++, it->second};
+    v.volume = volume < 0 ? 0 : volume > 4 ? 4 : volume;
+    g_voices.push_back(v);
+    return v.id;
+}
+HLE_FUNC(emu_sound_stop, void, (int voice)) {
+    std::lock_guard lk(g_slock);
+    std::erase_if(g_voices, [voice](const ModVoice& v) { return voice == 0 || v.id == voice; });
+}
+HLE_FUNC(emu_sound_playing, int, (int voice)) {
+    std::lock_guard lk(g_slock);
+    for (auto& v : g_voices)
+        if (v.id == voice) return 1;
+    return 0;
+}
+
 HLE_FUNC(emu_audio_write, void, (const int16_t* samples, int frames)) {
+    static std::vector<int16_t> mixed;
+    mixed.assign(samples, samples + size_t(frames) * 2);
+    if (mix_mod_sounds(mixed.data(), frames, g_rate)) samples = mixed.data();
     // a connected phone gets a copy; the PC device keeps pacing the render thread, silent if asked
     static std::vector<int16_t> silence;
     if (remote::audio(samples, frames, g_rate)) {
@@ -189,6 +284,10 @@ HLE_FUNC(emu_audio_close, void, ()) {
 HLE_FUNC(emu_pick_image_begin, void, ()) { remote::pick_image_begin(); }
 // for mods: any picture (PNG / JPEG / BMP / GIF), answered through emu_pick_image_poll / take
 HLE_FUNC(emu_pick_media_begin, void, ()) { remote::pick_image_begin(remote::kPickMedia); }
+// for mods: an MMD model (a ZIP archive of its folder, or a lone .pmx / .pmd from a phone)
+HLE_FUNC(emu_pick_model_begin, void, ()) { remote::pick_image_begin(remote::kPickModel); }
+// for mods: a sound file (.mp3 / .ogg)
+HLE_FUNC(emu_pick_sound_begin, void, ()) { remote::pick_image_begin(remote::kPickSound); }
 HLE_FUNC(emu_pick_image_cancel, void, ()) { remote::pick_image_cancel(); }
 HLE_FUNC(emu_pick_image_poll, int, (size_t* len)) { return remote::pick_image_poll(len); }
 HLE_FUNC(emu_pick_image_take, void, (void* out)) { remote::pick_image_take(out); }

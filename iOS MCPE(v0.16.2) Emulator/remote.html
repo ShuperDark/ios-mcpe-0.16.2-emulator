@@ -45,7 +45,7 @@
      spellcheck="false" enterkeyhint="send" placeholder="ここをタップして入力"></div>
 <div id="pick"><div><span id="picktext">スキンにする画像（64×64 または 64×32 の PNG）を選んでください。<br>
   <small>写真アプリの画像は透明部分が失われることがあるので、「ファイル」から選ぶのがおすすめです。</small></span>
-  <label>画像を選ぶ<input id="pickfile" type="file" accept="image/png,image/*"></label>
+  <label><span id="pickbtn">画像を選ぶ</span><input id="pickfile" type="file" accept="image/png,image/*"></label>
   <button id="pickcancel">キャンセル</button></div></div>
 <div id="snd">タップすると音が出ます</div>
 <div id="msg">接続しています…</div>
@@ -200,12 +200,17 @@ function connect() {
       return;
     }
     if (e.data === "pick cancel") { pick.classList.remove("on"); return; }
-    if (e.data === "pick" || e.data === "pick media") {
-      const media = e.data === "pick media";
-      document.getElementById("picktext").innerHTML = media
+    if (e.data === "pick" || e.data === "pick media" || e.data === "pick model" || e.data === "pick sound") {
+      const media = e.data === "pick media", model = e.data === "pick model", sound = e.data === "pick sound";
+      document.getElementById("picktext").innerHTML = sound
+        ? "音声ファイル（.mp3 / .ogg）を選んでください。"
+        : model
+        ? "MMD モデルを選んでください。<br><small>モデルのフォルダ（.pmx とテクスチャ）を圧縮した .zip を「ファイル」から選んでください。.pmx だけを選ぶとテクスチャなしになります。</small>"
+        : media
         ? "写真・画像・GIF を選んでください。<br><small>GIF のアニメーションを使うときは「ファイル」から選んでください（写真アプリからは静止画になることがあります）。</small>"
         : skinPickText;
-      pickfile.accept = media ? "image/*" : "image/png,image/*";
+      document.getElementById("pickbtn").textContent = model || sound ? "ファイルを選ぶ" : "画像を選ぶ";
+      pickfile.accept = model ? "" : sound ? "audio/*,.mp3,.ogg" : media ? "image/*" : "image/png,image/*";
       pick.classList.add("on");
       return;
     }

@@ -26,8 +26,11 @@ bool audio(const s16* samples, int frames, int rate);
 // Image picker: the connected phone's photo / file picker, otherwise a Windows file dialog.
 // kind 0 = custom skin (PNG), 1 = any picture for mods (PNG / JPEG / BMP / GIF; the file's
 // bytes are returned as they are). poll: 0 pending, 1 done (*len bytes ready for take),
-// -1 cancelled.
-enum PickKind { kPickSkin = 0, kPickMedia = 1 };
+// -1 cancelled. kind 2 = an MMD model for mods: a .zip of the model's folder as it is, or
+// a .pmx / .pmd with every file of its folder (textures), packed by the emulator into a
+// ZIP archive (stored, UTF-8 names, the picked model first). A phone sends the file it
+// picked (a .zip, or a lone .pmx / .pmd without its textures).
+enum PickKind { kPickSkin = 0, kPickMedia = 1, kPickModel = 2, kPickSound = 3 };
 void pick_image_begin(int kind = kPickSkin);
 int pick_image_poll(size_t* len);
 void pick_image_take(void* out);
